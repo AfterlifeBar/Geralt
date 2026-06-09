@@ -5,6 +5,40 @@
 
 export type StockStatus = "tracking" | "holding" | "candidate";
 
+// ---- DB row shapes (stocks + evaluations) -------------------------------
+
+export interface StockRow {
+  code: string;
+  name: string;
+  created_at?: string;
+}
+
+export interface EvaluationRow {
+  id: string;
+  stock_code: string;
+  eval_date: string; // ISO date
+  cond_floor: number;
+  cond_valuation: number;
+  cond_catalyst: number;
+  cond_beta: number;
+  cond_headroom: number;
+  total_score: number; // generated = sum of five
+  c1_gated: boolean;
+  veto_reason: string | null;
+  devils_advocate: string | null;
+  falsification: string | null;
+  status: StockStatus;
+  notes: string | null;
+  created_at?: string;
+}
+
+// One point on the 评分漂移时间线 (RUQ total over eval_date).
+export interface TimelinePoint {
+  date: string; // ISO date
+  total: number; // total_score 0–10
+  gated: boolean; // C1 / governance veto at this evaluation
+}
+
 // signal-light states
 export type Signal = "ok" | "warn" | "orange" | "red";
 
