@@ -80,7 +80,7 @@ export default async function WatchlistHome() {
         </table>
 
         <p className="mt-3.5 px-0.5 text-xs text-stone-400">
-          点任意标的进入详情页 · 蓝色光标那条虚线是它从右上滑向右下的漂移轨迹
+          点任意标的进入详情页 · 持仓标的的虚线是上一版评估滑向当前的漂移轨迹
         </p>
       </div>
     </div>
