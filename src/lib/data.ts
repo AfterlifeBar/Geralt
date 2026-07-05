@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { buildTimeline, toWatchlistEntry } from "@/lib/assemble";
+import { totalScore } from "@/lib/scoring";
 import type {
   EvaluationRow,
   StockRow,
@@ -9,8 +10,9 @@ import type {
 
 // ---------------------------------------------------------------------------
 // DATA LAYER — the single seam between the UI and the database.
-// Falls back to in-memory mock rows when Supabase env is absent, so the app
-// renders end-to-end in local dev before credentials are wired.
+// In development, falls back to in-memory mock rows when Supabase env is
+// absent so the app renders before credentials are wired. In production a
+// missing env is a deploy error and fails loudly instead of serving mock data.
 // ---------------------------------------------------------------------------
 
 function hasSupabaseEnv(): boolean {
@@ -19,6 +21,21 @@ function hasSupabaseEnv(): boolean {
   return Boolean(url && key && !url.includes("YOUR_PROJECT"));
 }
 
+function assertEnvOrDev(): boolean {
+  if (hasSupabaseEnv()) return true;
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(
+      "Supabase env (NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY) is missing in production — refusing to serve mock data.",
+    );
+  }
+  return false;
+}
+
+// Columns the watchlist actually needs — excludes the unbounded text columns
+// (veto_reason, devils_advocate, falsification, notes).
+const WATCHLIST_EVAL_COLUMNS =
+  "eval_date, cond_floor, cond_valuation, cond_catalyst, cond_beta, cond_headroom, total_score, c1_gated, status, created_at";
+
 export interface StockDetail {
   stock: StockRow;
   evaluations: EvaluationRow[]; // newest first
@@ -26,31 +43,34 @@ export interface StockDetail {
 }
 
 export async function getWatchlist(): Promise<WatchlistEntry[]> {
-  if (!hasSupabaseEnv()) {
+  if (!assertEnvOrDev()) {
     return MOCK_STOCKS.map((s) =>
       toWatchlistEntry(s, evalsFor(s.code)),
     ).filter((e): e is WatchlistEntry => e !== null);
   }
 
   const supabase = createClient();
-  const [{ data: stocks }, { data: evals }] = await Promise.all([
-    supabase.from("stocks").select("*"),
-    supabase
-      .from("evaluations")
-      .select("*")
-      .order("eval_date", { ascending: false })
-      .order("created_at", { ascending: false }),
-  ]);
+  // Latest 2 evaluations per stock via an embedded, per-parent-row limit —
+  // the watchlist only ever reads evals[0] (latest) and evals[1] (drift).
+  const { data, error } = await supabase
+    .from("stocks")
+    .select(`code, name, evaluations(${WATCHLIST_EVAL_COLUMNS})`)
+    .order("eval_date", { referencedTable: "evaluations", ascending: false })
+    .order("created_at", { referencedTable: "evaluations", ascending: false })
+    .limit(2, { referencedTable: "evaluations" });
+  if (error) throw new Error(`加载观察池失败: ${error.message}`);
 
-  const byStock = groupByStock((evals ?? []) as EvaluationRow[]);
-  return ((stocks ?? []) as StockRow[])
-    .map((s) => toWatchlistEntry(s, byStock.get(s.code) ?? []))
+  type Row = StockRow & { evaluations: EvaluationRow[] };
+  return ((data ?? []) as Row[])
+    .map((row) =>
+      toWatchlistEntry({ code: row.code, name: row.name }, row.evaluations ?? []),
+    )
     .filter((e): e is WatchlistEntry => e !== null)
-    .sort((a, b) => b.lastEval.localeCompare(a.lastEval));
+    .sort((a, b) => b.lastEvalDate.localeCompare(a.lastEvalDate));
 }
 
 export async function getStockDetail(code: string): Promise<StockDetail | null> {
-  if (!hasSupabaseEnv()) {
+  if (!assertEnvOrDev()) {
     const stock = MOCK_STOCKS.find((s) => s.code === code);
     if (!stock) return null;
     const evaluations = evalsFor(code);
@@ -58,36 +78,25 @@ export async function getStockDetail(code: string): Promise<StockDetail | null> 
   }
 
   const supabase = createClient();
-  const { data: stock } = await supabase
-    .from("stocks")
-    .select("*")
-    .eq("code", code)
-    .maybeSingle();
-  if (!stock) return null;
+  const [stockRes, evalsRes] = await Promise.all([
+    supabase.from("stocks").select("*").eq("code", code).maybeSingle(),
+    supabase
+      .from("evaluations")
+      .select("*")
+      .eq("stock_code", code)
+      .order("eval_date", { ascending: false })
+      .order("created_at", { ascending: false }),
+  ]);
+  if (stockRes.error) throw new Error(`加载标的失败: ${stockRes.error.message}`);
+  if (evalsRes.error) throw new Error(`加载评估失败: ${evalsRes.error.message}`);
+  if (!stockRes.data) return null;
 
-  const { data: evals } = await supabase
-    .from("evaluations")
-    .select("*")
-    .eq("stock_code", code)
-    .order("eval_date", { ascending: false })
-    .order("created_at", { ascending: false });
-
-  const evaluations = (evals ?? []) as EvaluationRow[];
+  const evaluations = (evalsRes.data ?? []) as EvaluationRow[];
   return {
-    stock: stock as StockRow,
+    stock: stockRes.data as StockRow,
     evaluations,
     timeline: buildTimeline(evaluations),
   };
-}
-
-function groupByStock(rows: EvaluationRow[]): Map<string, EvaluationRow[]> {
-  const m = new Map<string, EvaluationRow[]>();
-  for (const r of rows) {
-    const arr = m.get(r.stock_code) ?? [];
-    arr.push(r);
-    m.set(r.stock_code, arr);
-  }
-  return m; // already newest-first from the query ordering
 }
 
 // --- dev mock (no DB) -------------------------------------------------------
@@ -114,15 +123,7 @@ function ev(row: Partial<EvaluationRow> & { id: string; stock_code: string; eval
     notes: null,
   };
   const merged = { ...base, ...row };
-  return {
-    ...merged,
-    total_score:
-      merged.cond_floor +
-      merged.cond_valuation +
-      merged.cond_catalyst +
-      merged.cond_beta +
-      merged.cond_headroom,
-  } as EvaluationRow;
+  return { ...merged, total_score: totalScore(merged) } as EvaluationRow;
 }
 
 const MOCK_EVALS: EvaluationRow[] = [

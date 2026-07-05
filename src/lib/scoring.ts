@@ -55,30 +55,46 @@ export function axisRaw(s: CondScores) {
   };
 }
 
-// Dot position on the 0–10 quadrant map. The C1 gate (cond_floor === 0) pins
-// the dot to the left half regardless of the other scores.
+// THE single source of truth for which quadrant an evaluation belongs to.
+// C1 gate: cond_floor === 0 forces the left side regardless of everything
+// else — this rule outranks all others. Both the label and the plotted
+// position derive from this, so map and table can never disagree.
+export function quadrantSide(s: CondScores): { left: boolean; top: boolean } {
+  const { x, y } = axisRaw(s);
+  return {
+    left: s.cond_floor === 0 || x <= 2,
+    top: y > 3,
+  };
+}
+
+// Dot position on the 0–10 quadrant map, consistent with quadrantSide: when
+// the raw coordinate lands exactly on a divider (x=2 → fund=5, y=3 → narr=5)
+// or the C1 gate pins the side, the dot is nudged off the axis into the
+// quadrant the label reports.
 export function quadrantPosition(s: CondScores): { fund: number; narr: number } {
   const { x, y } = axisRaw(s);
+  const { left, top } = quadrantSide(s);
   let fund = (x / X_MAX) * 10;
-  const narr = (y / Y_MAX) * 10;
-  if (s.cond_floor === 0 && fund >= 5) fund = 4.6; // C1 gate → 左侧
+  let narr = (y / Y_MAX) * 10;
+  if (left && fund >= 5) fund = 4.6;
+  if (!top && narr >= 5) narr = 4.6;
   return { fund, narr };
 }
 
-// Quadrant label. c1_gated (governance veto) reports "—"; otherwise left/right
-// is decided by the x conditions — but cond_floor === 0 forces left (C1 gate).
+// Quadrant label. c1_gated (governance veto) reports "—".
 export function quadrantLabel(s: CondScores, c1Gated: boolean): string {
   if (c1Gated) return "—";
-  const left = s.cond_floor === 0 ? true : s.cond_floor + s.cond_valuation <= 2;
-  const top = s.cond_catalyst + s.cond_beta + s.cond_headroom > 3;
+  const { left, top } = quadrantSide(s);
   if (left) return top ? "左上" : "左下";
   return top ? "右上" : "右下";
 }
 
-// Signal lights = per-condition health (2 ok / 1 warn / 0 red), in display order.
+// Per-score health: 2 ok / 1 warn / 0 red.
+export function scoreSignal(v: number): Signal {
+  return v >= 2 ? "ok" : v === 1 ? "warn" : "red";
+}
+
+// Signal lights = per-condition health, in display order.
 export function conditionSignals(s: CondScores): Signal[] {
-  return CONDITIONS.map((c) => {
-    const v = s[c.key];
-    return v >= 2 ? "ok" : v === 1 ? "warn" : "red";
-  });
+  return CONDITIONS.map((c) => scoreSignal(s[c.key]));
 }

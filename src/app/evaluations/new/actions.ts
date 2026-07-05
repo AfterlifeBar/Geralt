@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { CONDITIONS } from "@/lib/scoring";
+import { shanghaiToday } from "@/lib/dates";
 import type { StockStatus } from "@/lib/types";
 
 export interface FormState {
@@ -11,6 +12,7 @@ export interface FormState {
 }
 
 const STATUSES: StockStatus[] = ["tracking", "holding", "candidate"];
+const EVAL_DATE_MIN = "1990-01-01";
 
 function parseScore(v: FormDataEntryValue | null): number | null {
   if (v === null || v === "") return null;
@@ -30,7 +32,7 @@ export async function createEvaluation(
   const name = str(formData.get("name"));
   const status = str(formData.get("status")) as StockStatus;
   const c1Gated = formData.get("c1_gated") === "on";
-  const evalDate = str(formData.get("eval_date")) || undefined;
+  const evalDate = str(formData.get("eval_date"));
   const vetoReason = str(formData.get("veto_reason"));
   const devilsAdvocate = str(formData.get("devils_advocate"));
   const falsification = str(formData.get("falsification"));
@@ -40,18 +42,30 @@ export async function createEvaluation(
   if (!name) return { error: "请填写股票名称。" };
   if (!STATUSES.includes(status)) return { error: "请选择状态。" };
 
-  // five scores — all required
+  // eval_date: required, real date, not in the future (market timezone), sane floor
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(evalDate) || Number.isNaN(Date.parse(evalDate))) {
+    return { error: "评估日期格式不正确。" };
+  }
+  const today = shanghaiToday();
+  if (evalDate > today) return { error: `评估日期不能晚于今天 (${today})。` };
+  if (evalDate < EVAL_DATE_MIN) return { error: "评估日期过早,请检查年份。" };
+
+  // five scores — all required. The C1 gate forces cond_floor to 0 BEFORE
+  // validation, so a gated submission never depends on the form sending it.
   const scores: Record<string, number> = {};
   for (const c of CONDITIONS) {
+    if (c.key === "cond_floor" && c1Gated) {
+      scores.cond_floor = 0;
+      continue;
+    }
     const n = parseScore(formData.get(c.key));
     if (n === null) return { error: `「${c.label}」未打分,五条必须全部填写 (0/1/2)。` };
     scores[c.key] = n;
   }
 
-  // C1 gate / governance red line
-  if (c1Gated) {
-    scores.cond_floor = 0; // gate locks 现金流底 to 0
-    if (!vetoReason) return { error: "勾选治理红线后必须填写「治理红线细节」。" };
+  // governance red line requires the reason
+  if (c1Gated && !vetoReason) {
+    return { error: "勾选治理红线后必须填写「治理红线细节」。" };
   }
 
   // holding gate — 反向检查 + 证伪退出条件 required to save as 建仓
@@ -64,10 +78,18 @@ export async function createEvaluation(
 
   const supabase = createClient();
 
-  const { error: stockErr } = await supabase
+  // Create the stock if new; never overwrite an existing stock's name from
+  // this form (a typo here must not rename the stock across all views).
+  const { data: existing, error: lookupErr } = await supabase
     .from("stocks")
-    .upsert({ code, name }, { onConflict: "code" });
-  if (stockErr) return { error: `保存标的失败: ${stockErr.message}` };
+    .select("code")
+    .eq("code", code)
+    .maybeSingle();
+  if (lookupErr) return { error: `查询标的失败: ${lookupErr.message}` };
+  if (!existing) {
+    const { error: insertErr } = await supabase.from("stocks").insert({ code, name });
+    if (insertErr) return { error: `保存标的失败: ${insertErr.message}` };
+  }
 
   const { error: evalErr } = await supabase.from("evaluations").insert({
     stock_code: code,

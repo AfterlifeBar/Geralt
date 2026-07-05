@@ -1,27 +1,10 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getStockDetail } from "@/lib/data";
-import { CONDITIONS, quadrantLabel } from "@/lib/scoring";
+import { condScores } from "@/lib/assemble";
+import { CONDITIONS, quadrantLabel, scoreSignal } from "@/lib/scoring";
 import { DriftTimeline } from "@/components/DriftTimeline";
-import { StatusBadge } from "@/components/badges";
-import type { CondScores } from "@/lib/scoring";
-import type { EvaluationRow } from "@/lib/types";
-
-function scoresOf(e: EvaluationRow): CondScores {
-  return {
-    cond_floor: e.cond_floor,
-    cond_valuation: e.cond_valuation,
-    cond_catalyst: e.cond_catalyst,
-    cond_beta: e.cond_beta,
-    cond_headroom: e.cond_headroom,
-  };
-}
-
-const SCORE_DOT: Record<number, string> = {
-  0: "bg-red-500",
-  1: "bg-amber-500",
-  2: "bg-emerald-500",
-};
+import { SIGNAL, StatusBadge } from "@/components/badges";
 
 export default async function StockDetail({
   params,
@@ -48,7 +31,7 @@ export default async function StockDetail({
             {latest && <StatusBadge status={latest.status} />}
           </div>
           <Link
-            href={`/evaluations/new?code=${stock.code}`}
+            href={`/evaluations/new?code=${stock.code}&name=${encodeURIComponent(stock.name)}`}
             className="rounded border border-stone-300 px-2.5 py-1 text-sm text-stone-500 hover:bg-stone-100"
           >
             + 新建评估
@@ -71,7 +54,7 @@ export default async function StockDetail({
               <div className="mb-3 flex items-baseline justify-between">
                 <span className="text-sm font-medium">最近评估 · 五条打分</span>
                 <span className="font-mono text-xs text-stone-400">
-                  {latest.eval_date} · 象限 {quadrantLabel(scoresOf(latest), latest.c1_gated)}
+                  {latest.eval_date} · 象限 {quadrantLabel(condScores(latest), latest.c1_gated)}
                   {!latest.c1_gated && ` · RUQ ${latest.total_score}`}
                 </span>
               </div>
@@ -94,7 +77,7 @@ export default async function StockDetail({
                         </div>
                         <div className="truncate text-xs text-stone-400">{c.hint}</div>
                       </div>
-                      <span className={`inline-block h-2 w-2 rounded-full ${SCORE_DOT[v]}`} />
+                      <span className={`inline-block h-2 w-2 rounded-full ${SIGNAL[scoreSignal(v)]}`} />
                       <span className="w-4 text-right font-mono text-sm font-medium">{v}</span>
                     </li>
                   );

@@ -7,12 +7,12 @@ import { CONDITIONS, SCORE_OPTIONS } from "@/lib/scoring";
 
 const initial: FormState = {};
 
-function SubmitButton({ disabled }: { disabled: boolean }) {
+function SubmitButton() {
   const { pending } = useFormStatus();
   return (
     <button
       type="submit"
-      disabled={pending || disabled}
+      disabled={pending}
       className="rounded bg-stone-800 px-4 py-2 text-sm text-white hover:bg-stone-700 disabled:opacity-40"
     >
       {pending ? "保存中…" : "保存评估"}
@@ -22,9 +22,11 @@ function SubmitButton({ disabled }: { disabled: boolean }) {
 
 export function EvaluationForm({
   defaultCode = "",
+  defaultName = "",
   today,
 }: {
   defaultCode?: string;
+  defaultName?: string;
   today: string;
 }) {
   const [state, formAction] = useFormState(createEvaluation, initial);
@@ -48,9 +50,15 @@ export function EvaluationForm({
           />
         </label>
         <label className="block">
-          <span className="mb-1 block text-xs font-medium text-stone-500">股票名称</span>
+          <span className="mb-1 block text-xs font-medium text-stone-500">
+            股票名称
+            {defaultCode && (
+              <span className="ml-2 font-normal text-stone-400">已有标的不会被改名</span>
+            )}
+          </span>
           <input
             name="name"
+            defaultValue={defaultName}
             required
             placeholder="中控技术"
             className="w-full rounded border border-stone-300 px-3 py-2 text-sm focus:border-stone-500 focus:outline-none"
@@ -64,6 +72,8 @@ export function EvaluationForm({
           type="date"
           name="eval_date"
           defaultValue={today}
+          max={today}
+          required
           className="w-full rounded border border-stone-300 px-3 py-2 font-mono text-sm focus:border-stone-500 focus:outline-none"
         />
       </label>
@@ -89,31 +99,45 @@ export function EvaluationForm({
                   </div>
                   <div className="truncate text-xs text-stone-400">{c.hint}</div>
                 </div>
-                <div className="flex gap-1">
-                  {SCORE_OPTIONS.map((opt) => (
-                    <label
-                      key={opt.value}
-                      title={opt.label}
-                      className={`flex h-8 w-8 cursor-pointer items-center justify-center rounded border text-sm font-mono ${
-                        locked
-                          ? "cursor-not-allowed border-stone-200 text-stone-300"
-                          : "border-stone-300 text-stone-600 hover:bg-stone-100 has-[:checked]:border-stone-800 has-[:checked]:bg-stone-800 has-[:checked]:text-white"
-                      }`}
-                    >
-                      <input
-                        type="radio"
-                        name={c.key}
-                        value={opt.value}
-                        required={!locked}
-                        disabled={locked}
-                        checked={locked ? opt.value === 0 : undefined}
-                        readOnly={locked}
-                        className="sr-only"
-                      />
-                      {opt.value}
-                    </label>
-                  ))}
-                </div>
+                {locked ? (
+                  // Gate locked: C1 is fixed to 0. A hidden input carries the
+                  // value (disabled inputs are excluded from form submission).
+                  <div className="flex gap-1">
+                    <input type="hidden" name="cond_floor" value="0" />
+                    {SCORE_OPTIONS.map((opt) => (
+                      <span
+                        key={opt.value}
+                        title={opt.label}
+                        className={`flex h-8 w-8 cursor-not-allowed items-center justify-center rounded border font-mono text-sm ${
+                          opt.value === 0
+                            ? "border-red-600 bg-red-600 text-white"
+                            : "border-stone-200 text-stone-300"
+                        }`}
+                      >
+                        {opt.value}
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="flex gap-1">
+                    {SCORE_OPTIONS.map((opt) => (
+                      <label
+                        key={opt.value}
+                        title={opt.label}
+                        className="flex h-8 w-8 cursor-pointer items-center justify-center rounded border border-stone-300 font-mono text-sm text-stone-600 hover:bg-stone-100 has-[:checked]:border-stone-800 has-[:checked]:bg-stone-800 has-[:checked]:text-white"
+                      >
+                        <input
+                          type="radio"
+                          name={c.key}
+                          value={opt.value}
+                          required
+                          className="sr-only"
+                        />
+                        {opt.value}
+                      </label>
+                    ))}
+                  </div>
+                )}
               </div>
             );
           })}
@@ -216,7 +240,7 @@ export function EvaluationForm({
       )}
 
       <div className="flex justify-end">
-        <SubmitButton disabled={false} />
+        <SubmitButton />
       </div>
     </form>
   );

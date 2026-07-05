@@ -1,23 +1,13 @@
-import { createClient } from "@supabase/supabase-js";
-import { readFileSync } from "node:fs";
+import { createAnonClient } from "./_env.mjs";
 
-// load .env.local
-const env = Object.fromEntries(
-  readFileSync(new URL("../.env.local", import.meta.url), "utf8")
-    .split("\n")
-    .filter((l) => l.includes("="))
-    .map((l) => {
-      const i = l.indexOf("=");
-      return [l.slice(0, i).trim(), l.slice(i + 1).trim()];
-    }),
+const { env, client: sb } = createAnonClient();
+console.log("URL:", env.NEXT_PUBLIC_SUPABASE_URL);
+console.log(
+  "KEY prefix:",
+  env.NEXT_PUBLIC_SUPABASE_ANON_KEY.slice(0, 16) + "…",
+  "(publishable/anon path)\n",
 );
 
-const url = env.NEXT_PUBLIC_SUPABASE_URL;
-const key = env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-console.log("URL:", url);
-console.log("KEY prefix:", key.slice(0, 16) + "…", "(publishable/anon path)\n");
-
-const sb = createClient(url, key);
 let pass = 0,
   fail = 0;
 const ok = (m) => (console.log("  PASS", m), pass++);

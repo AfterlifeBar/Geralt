@@ -40,7 +40,7 @@ export interface TimelinePoint {
 }
 
 // signal-light states
-export type Signal = "ok" | "warn" | "orange" | "red";
+export type Signal = "ok" | "warn" | "red";
 
 // Quadrant-map position for one stock, derived from its latest evaluation.
 export interface QuadrantPosition {
@@ -59,7 +59,9 @@ export interface WatchlistEntry {
   quadrant: string; // e.g. "右上" / "右下" / "—"
   signals: Signal[];
   lastEval: string; // display string, e.g. "06-02"
+  lastEvalDate: string; // full ISO date — sort on this, never on lastEval
   trend?: "down" | "up";
   drift?: QuadrantPosition; // previous evaluation's position (dashed trajectory)
+  quadrantFrom?: string; // previous evaluation's quadrant label (drift caption)
   veto?: boolean;
 }

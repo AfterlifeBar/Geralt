@@ -34,7 +34,7 @@
 
 - [ ] `NEXT_PUBLIC_SUPABASE_URL` = 你的 Supabase 项目 URL
 - [ ] `NEXT_PUBLIC_SUPABASE_ANON_KEY` = anon / publishable 公钥
-- [ ] 这两个变量在 `src/lib/supabase/server.ts`、`src/lib/data.ts`(以及目前未被引用的 `client.ts`)读取,**两个都必须配齐**;全代码库只有这两个 env
+- [ ] 这两个变量在 `src/lib/supabase/server.ts`、`src/lib/data.ts` 读取,**两个都必须配齐**;全代码库只有这两个 env
 - [ ] 勾选作用域(Environments):
   - **Production** = 生产分支(`main`)的部署
   - **Preview** = 其他分支/PR 的部署
@@ -79,9 +79,9 @@
 
 ### 一个需要澄清的现状(影响严重度,但不改变结论)
 
-- [ ] 目前**所有 DB 访问都在服务端**:读走 Server Components(`data.ts`),写走 Server Action(`actions.ts`),都用服务端 client。浏览器 client `src/lib/supabase/client.ts` **当前没有任何地方 import** → 所以 anon 公钥**目前并没有被打进浏览器 bundle**,无法从已部署 JS 里直接扒到。
+- [ ] 目前**所有 DB 访问都在服务端**:读走 Server Components(`data.ts`),写走 Server Action(`actions.ts`),都用服务端 client。浏览器端 Supabase client 已删除(没有任何客户端代码触达 DB)→ 所以 anon 公钥**目前并没有被打进浏览器 bundle**,无法从已部署 JS 里直接扒到。
 - [ ] **但这不构成安全**,原因有三:
-  1. 这是个 **anon / publishable 公钥**,Supabase 设计上就当它是公开的;只要 `client.ts` 哪天被任一客户端组件引用(后续做交互功能极可能发生),`NEXT_PUBLIC_` 前缀就会立刻把它送进浏览器。
+  1. 这是个 **anon / publishable 公钥**,Supabase 设计上就当它是公开的;将来任何客户端组件直接连 Supabase(后续做交互功能可能发生),`NEXT_PUBLIC_` 前缀就会立刻把它送进浏览器。
   2. 即便不在 bundle 里,REST 端点是公网的,而开放的 anon RLS 让**数据库安全完全寄托于「公钥保密」**——而公钥本就不该保密,这是错误的控制层。
   3. 这把 key 实际上已离开保密状态(在对话里贴过、被脚本用过)。
 - [ ] 结论:**把数据库当作已暴露来对待,在 Supabase 层(RLS/Auth)修,而不是靠前端墙。**

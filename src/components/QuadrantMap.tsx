@@ -8,7 +8,7 @@ const X0 = 70,
   Y0 = 320,
   Y1 = 40; // plot bounds; y inverted
 const px = (f: number) => X0 + (f / 10) * (X1 - X0);
-const py = (n: number) => Y0 - ((n / 10) * (Y0 - Y1)) / 1; // n 0..10
+const py = (n: number) => Y0 - (n / 10) * (Y0 - Y1); // n 0..10
 const CX = px(5),
   CY = py(5); // quadrant split at midpoint
 
@@ -49,18 +49,20 @@ export function QuadrantMap({ stocks }: { stocks: WatchlistEntry[] }) {
             </g>
           );
         }
-        // drifting holding: ghost v1 + dashed trajectory + amber v2
+        // drifting stock: ghost previous position + dashed trajectory + amber current
         if (s.drift) {
           const fx = px(s.drift.fund),
             fy = py(s.drift.narr);
           return (
             <g key={s.code}>
               <circle cx={fx} cy={fy} r="6.5" fill="none" stroke="#d97706" strokeWidth="1" strokeDasharray="2 2" />
-              <text x={fx + 11} y={fy - 3} fill="#a8a29e" fontSize="12">v1</text>
+              <text x={fx + 11} y={fy - 3} fill="#a8a29e" fontSize="12">前值</text>
               <line x1={fx - 1} y1={fy + 8} x2={x + 1} y2={y - 8} stroke="#d97706" strokeWidth="1" strokeDasharray="3 3" opacity="0.7" markerEnd="url(#drift-arrow)" />
               <circle cx={x} cy={y} r="6.5" fill="#d97706" />
               <text x={x + 12} y={y + 4} fill="#44403c" fontSize="12">{s.name} · {s.ruq}</text>
-              <text x={x + 12} y={y + 19} fill="#a8a29e" fontSize="12">右上 → 右下</text>
+              {s.quadrantFrom && (
+                <text x={x + 12} y={y + 19} fill="#a8a29e" fontSize="12">{s.quadrantFrom} → {s.quadrant}</text>
+              )}
             </g>
           );
         }

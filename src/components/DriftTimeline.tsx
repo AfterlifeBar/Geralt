@@ -1,3 +1,4 @@
+import { mmdd } from "@/lib/dates";
 import type { TimelinePoint } from "@/lib/types";
 
 // 评分漂移时间线 — same stock's evaluations plotted as an RUQ-total line over
@@ -13,10 +14,6 @@ const X0 = 44,
 const SCORE_MAX = 10;
 
 const sy = (total: number) => Y0 - (total / SCORE_MAX) * (Y0 - Y1);
-
-function mmdd(iso: string) {
-  return iso.slice(5, 10);
-}
 
 export function DriftTimeline({ points }: { points: TimelinePoint[] }) {
   if (points.length === 0) {

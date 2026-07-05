@@ -1,12 +1,13 @@
 import Link from "next/link";
 import { EvaluationForm } from "@/components/EvaluationForm";
+import { shanghaiToday } from "@/lib/dates";
 
 export default function NewEvaluation({
   searchParams,
 }: {
-  searchParams: { code?: string };
+  searchParams: { code?: string; name?: string };
 }) {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = shanghaiToday();
 
   return (
     <div className="min-h-screen bg-stone-50 px-6 py-8 text-stone-800">
@@ -19,7 +20,11 @@ export default function NewEvaluation({
         </div>
 
         <div className="mt-6">
-          <EvaluationForm defaultCode={searchParams.code ?? ""} today={today} />
+          <EvaluationForm
+            defaultCode={searchParams.code ?? ""}
+            defaultName={searchParams.name ?? ""}
+            today={today}
+          />
         </div>
       </div>
     </div>

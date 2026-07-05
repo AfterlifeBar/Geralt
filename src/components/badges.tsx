@@ -10,7 +10,6 @@ export const STATUS: Record<StockStatus, { label: string; cls: string }> = {
 export const SIGNAL: Record<Signal, string> = {
   ok: "bg-emerald-500",
   warn: "bg-amber-500",
-  orange: "bg-orange-500",
   red: "bg-red-500",
 };
 

@@ -1,5 +1,8 @@
 import Link from "next/link";
 import { getWatchlist } from "@/lib/data";
+
+// Always render from the live DB — never statically bake watchlist data.
+export const dynamic = "force-dynamic";
 import { QuadrantMap } from "@/components/QuadrantMap";
 import { StatusBadge, SignalDots } from "@/components/badges";
 
@@ -69,6 +72,7 @@ export default async function WatchlistHome() {
                 <td className="px-2 py-3 text-stone-500">
                   {s.quadrant}
                   {s.trend === "down" && <span className="ml-1 text-amber-600">↓</span>}
+                  {s.trend === "up" && <span className="ml-1 text-emerald-600">↑</span>}
                 </td>
                 <td className="px-2 py-3">
                   <SignalDots signals={s.signals} veto={s.veto} />
