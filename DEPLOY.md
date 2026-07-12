@@ -33,8 +33,9 @@
 位置:导入时内联添加,或后续在 **Project → Settings → Environment Variables**。
 
 - [ ] `NEXT_PUBLIC_SUPABASE_URL` = 你的 Supabase 项目 URL
-- [ ] `NEXT_PUBLIC_SUPABASE_ANON_KEY` = anon / publishable 公钥
-- [ ] 这两个变量在 `src/lib/supabase/server.ts`、`src/lib/data.ts` 读取,**两个都必须配齐**;全代码库只有这两个 env
+- [ ] `NEXT_PUBLIC_SUPABASE_ANON_KEY` = anon / publishable 公钥(过渡期回退用)
+- [ ] `SUPABASE_SERVICE_ROLE_KEY` = service_role 密钥(**无 NEXT_PUBLIC_ 前缀**,勾选 Sensitive,仅服务端)——迁移 0002 锁定 anon 后必须有它
+- [ ] 服务端统一走 `src/lib/supabase/admin.ts`(`import "server-only"` 守卫):优先 service_role,缺失时回退 anon 公钥,保证切换期零停机
 - [ ] 勾选作用域(Environments):
   - **Production** = 生产分支(`main`)的部署
   - **Preview** = 其他分支/PR 的部署
@@ -90,7 +91,10 @@
 
 > ⚠️ 注意依赖:当前 app **即便在服务端也是以 anon 身份**访问 DB。一旦 drop 掉 anon 策略,默认拒绝会**让现有读写全部失效**,所以下面两个方案必须**同时**改访问方式,不能只 drop 策略。
 
-- [ ] **方案 A —— 单用户个人工具(最简单、最安全)**:`drop policy` 删掉两条 `*_anon_all`,**保持 RLS 开启**(默认拒绝);把服务端 DB 访问从 anon 改为**仅服务端**的 `service_role` client(绕过 RLS,但 key 永不进浏览器);浏览器侧不再持有任何能访问 DB 的密钥。
+- [ ] **方案 A —— 单用户个人工具(最简单、最安全,代码已就位)**,零停机顺序:
+  1. 在 Vercel 加 `SUPABASE_SERVICE_ROLE_KEY`(Sensitive)并重新部署 —— `admin.ts` 自动改走 service_role;
+  2. 在 Supabase SQL Editor 跑 `supabase/migrations/0002_lock_down_anon.sql`(删两条 anon 策略,RLS 保持开启 = 默认拒绝);
+  3. 跑 `node scripts/verify-lockdown.mjs` 确认 anon 零读写,同时线上站点应照常工作(service_role 不受 RLS 影响)。
 - [ ] **方案 B —— 要多用户**:引入 Supabase Auth,策略改为 `to authenticated using (auth.uid() = owner_id)`(需加 owner 列),anon 读写归零。
 - [ ] **验证**:锁定后,照 `verify-db.mjs` 的方式直接打 REST 端点——**若仍成功,数据就还没受保护**。
 
@@ -119,6 +123,14 @@
 - [ ] **Settings → Domains** 添加域名并按提示配 DNS
 - [ ] 核对 Production 分支(默认 `main`,若用 `master` 在 **Settings → Git** 改)
 - [ ] Hobby 套餐下 `Standard Protection` 锁不住生产自定义域 → 公开生产域前务必已完成第 5 节的数据库层加固
+
+---
+
+## 7) 部署后基建(项目最初经文件直传创建时)
+
+- [ ] **关联 GitHub 自动部署**:Vercel → 项目 `geralt` → **Settings → Git → Connect Git Repository** → 选 `AfterlifeBar/Geralt`,Production Branch 设为 `main` → 之后 push main 即自动部署
+- [ ] 关联后**必须在 Settings → Environment Variables 补齐第 2 节的变量**(git 构建不再携带文件直传时的 `.env.production`)
+- [ ] **Supabase 保活**:`vercel.json` 已配置每日 Cron 打 `/api/keepalive`(轻量查询一次 DB),防免费版一周无活动自动暂停;git 关联后的下一次部署自动生效,可在 Vercel → Settings → Cron Jobs 里确认
 
 ---
 

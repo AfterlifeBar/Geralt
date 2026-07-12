@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { createClient } from "@/lib/supabase/server";
+import { createServerSupabase } from "@/lib/supabase/admin";
 import { CONDITIONS } from "@/lib/scoring";
 import { shanghaiToday } from "@/lib/dates";
 import type { StockStatus } from "@/lib/types";
@@ -76,7 +76,7 @@ export async function createEvaluation(
       return { error: "保存为「建仓」前必须填写「证伪退出条件」。" };
   }
 
-  const supabase = createClient();
+  const supabase = createServerSupabase();
 
   // Create the stock if new; never overwrite an existing stock's name from
   // this form (a typo here must not rename the stock across all views).

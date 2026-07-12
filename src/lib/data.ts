@@ -1,4 +1,4 @@
-import { createClient } from "@/lib/supabase/server";
+import { createServerSupabase } from "@/lib/supabase/admin";
 import { buildTimeline, toWatchlistEntry } from "@/lib/assemble";
 import { totalScore } from "@/lib/scoring";
 import type {
@@ -17,7 +17,9 @@ import type {
 
 function hasSupabaseEnv(): boolean {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  const key =
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   return Boolean(url && key && !url.includes("YOUR_PROJECT"));
 }
 
@@ -49,7 +51,7 @@ export async function getWatchlist(): Promise<WatchlistEntry[]> {
     ).filter((e): e is WatchlistEntry => e !== null);
   }
 
-  const supabase = createClient();
+  const supabase = createServerSupabase();
   // Latest 2 evaluations per stock via an embedded, per-parent-row limit —
   // the watchlist only ever reads evals[0] (latest) and evals[1] (drift).
   const { data, error } = await supabase
@@ -77,7 +79,7 @@ export async function getStockDetail(code: string): Promise<StockDetail | null> 
     return { stock, evaluations, timeline: buildTimeline(evaluations) };
   }
 
-  const supabase = createClient();
+  const supabase = createServerSupabase();
   const [stockRes, evalsRes] = await Promise.all([
     supabase.from("stocks").select("*").eq("code", code).maybeSingle(),
     supabase
