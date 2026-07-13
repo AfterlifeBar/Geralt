@@ -1,0 +1,37 @@
+name: Fetch market data (AkShare)
+
+on:
+  schedule:
+    # 工作日 16:15 北京时间 (08:15 UTC) — A 股收盘后
+    - cron: "15 8 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      backfill_days:
+        description: "回填最近 N 天日线 (留空 = 当日快照)"
+        required: false
+        default: ""
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install akshare requests
+
+      - name: Fetch and upsert
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          if [ -n "${{ github.event.inputs.backfill_days }}" ]; then
+            python scripts/fetch_market_data.py --backfill "${{ github.event.inputs.backfill_days }}"
+          else
+            python scripts/fetch_market_data.py
+          fi

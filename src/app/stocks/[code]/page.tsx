@@ -1,9 +1,10 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getStockDetail } from "@/lib/data";
+import { getMarketSnapshot, getStockDetail } from "@/lib/data";
 import { condScores } from "@/lib/assemble";
 import { CONDITIONS, quadrantLabel, scoreSignal } from "@/lib/scoring";
 import { DriftTimeline } from "@/components/DriftTimeline";
+import { MarketStrip } from "@/components/MarketStrip";
 import { SIGNAL, StatusBadge } from "@/components/badges";
 
 export default async function StockDetail({
@@ -11,7 +12,10 @@ export default async function StockDetail({
 }: {
   params: { code: string };
 }) {
-  const detail = await getStockDetail(params.code);
+  const [detail, market] = await Promise.all([
+    getStockDetail(params.code),
+    getMarketSnapshot(params.code),
+  ]);
   if (!detail) notFound();
 
   const { stock, evaluations, timeline } = detail;
@@ -37,6 +41,9 @@ export default async function StockDetail({
             + 新建评估
           </Link>
         </div>
+
+        {/* market data strip (AkShare daily) */}
+        {market && <MarketStrip market={market} />}
 
         {/* drift timeline — signature element */}
         <div className="mt-5 rounded-lg border border-stone-200 bg-white px-5 pb-3 pt-4">
