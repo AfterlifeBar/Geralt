@@ -44,6 +44,42 @@ export interface StockDetail {
   timeline: TimelinePoint[]; // oldest → newest
 }
 
+export interface MarketSnapshot {
+  trade_date: string;
+  close: number | null;
+  pct_chg: number | null;
+  pe: number | null;
+  pb: number | null;
+  market_cap: number | null;
+  closes: { date: string; close: number }[]; // oldest → newest, for sparkline
+}
+
+// 最新行情 + 近 60 日收盘 (AkShare 每日写入 market_data; 无数据返回 null)
+export async function getMarketSnapshot(code: string): Promise<MarketSnapshot | null> {
+  if (!assertEnvOrDev()) return null; // dev mock 模式无行情
+
+  const supabase = createServerSupabase();
+  const { data, error } = await supabase
+    .from("market_data")
+    .select("trade_date, close, pct_chg, pe, pb, market_cap")
+    .eq("stock_code", code)
+    .order("trade_date", { ascending: false })
+    .limit(60);
+  if (error) {
+    // PGRST205 = 表尚未创建 (迁移 0003 未跑) — 行情是增强功能,按"暂无数据"降级
+    if (error.code === "PGRST205") return null;
+    throw new Error(`加载行情失败: ${error.message}`);
+  }
+  if (!data || data.length === 0) return null;
+
+  const latest = data[0];
+  const closes = [...data]
+    .reverse()
+    .filter((d) => d.close != null)
+    .map((d) => ({ date: d.trade_date as string, close: d.close as number }));
+  return { ...latest, closes } as MarketSnapshot;
+}
+
 export async function getWatchlist(): Promise<WatchlistEntry[]> {
   if (!assertEnvOrDev()) {
     return MOCK_STOCKS.map((s) =>

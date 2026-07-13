@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useFormState, useFormStatus } from "react-dom";
 import { createEvaluation, type FormState } from "@/app/evaluations/new/actions";
+import { AiReviewPanel } from "@/components/AiReviewPanel";
 import { CONDITIONS, SCORE_OPTIONS } from "@/lib/scoring";
 
 const initial: FormState = {};
@@ -32,6 +33,8 @@ export function EvaluationForm({
   const [state, formAction] = useFormState(createEvaluation, initial);
   const [c1Gated, setC1Gated] = useState(false);
   const [status, setStatus] = useState<"tracking" | "holding" | "candidate">("candidate");
+  const [code, setCode] = useState(defaultCode);
+  const [name, setName] = useState(defaultName);
 
   const isHolding = status === "holding";
 
@@ -43,7 +46,8 @@ export function EvaluationForm({
           <span className="mb-1 block text-xs font-medium text-stone-500">股票代码</span>
           <input
             name="code"
-            defaultValue={defaultCode}
+            value={code}
+            onChange={(e) => setCode(e.target.value)}
             required
             placeholder="688777"
             className="w-full rounded border border-stone-300 px-3 py-2 font-mono text-sm focus:border-stone-500 focus:outline-none"
@@ -58,7 +62,8 @@ export function EvaluationForm({
           </span>
           <input
             name="name"
-            defaultValue={defaultName}
+            value={name}
+            onChange={(e) => setName(e.target.value)}
             required
             placeholder="中控技术"
             className="w-full rounded border border-stone-300 px-3 py-2 text-sm focus:border-stone-500 focus:outline-none"
@@ -77,6 +82,9 @@ export function EvaluationForm({
           className="w-full rounded border border-stone-300 px-3 py-2 font-mono text-sm focus:border-stone-500 focus:outline-none"
         />
       </label>
+
+      {/* AI 初评 — 参考材料,不打分 */}
+      <AiReviewPanel code={code} name={name} />
 
       {/* five conditions */}
       <fieldset className="rounded-lg border border-stone-200 bg-white px-5 py-4">

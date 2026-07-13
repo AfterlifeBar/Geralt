@@ -126,6 +126,15 @@
 
 ---
 
+## 8) 二期启用清单(AI 初评 + AkShare)
+
+- [ ] **建表**:Supabase SQL Editor 跑 `supabase/migrations/0003_phase2.sql`(`market_data` + `ai_reviews`,仅 service_role 可达;不跑也不影响一期功能,行情/AI 面板自动降级)
+- [ ] **AI 初评**:在 console.anthropic.com 创建 API key → Vercel 环境变量加 `ANTHROPIC_API_KEY`(无 NEXT_PUBLIC_ 前缀,Sensitive)→ Redeploy。未配置时点「生成 AI 初评」会明确报错,不影响其他功能
+- [ ] **AkShare 定时抓取**:GitHub 仓库 → Settings → Secrets and variables → Actions,加两个 secret:`SUPABASE_URL`、`SUPABASE_SERVICE_ROLE_KEY` → Actions 页手动跑一次 "Fetch market data",输入 backfill_days=90 回填历史 → 之后工作日 16:15(北京时间)自动跑
+- [ ] AI 初评铁律已焊死:AI 只输出证据整理(【C1..C5】/红线扫描/反向检查草稿/证伪建议/来源),提示词与展示层都禁止分数;五条打分与反向检查仍然只能人工
+
+---
+
 ## 7) 部署后基建(项目最初经文件直传创建时)
 
 - [ ] **关联 GitHub 自动部署**:Vercel → 项目 `geralt` → **Settings → Git → Connect Git Repository** → 选 `AfterlifeBar/Geralt`,Production Branch 设为 `main` → 之后 push main 即自动部署
