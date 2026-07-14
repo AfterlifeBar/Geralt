@@ -1,15 +1,18 @@
 import "server-only";
-import Anthropic from "@anthropic-ai/sdk";
+import OpenAI from "openai";
 import { NextResponse } from "next/server";
 import { createServerSupabase } from "@/lib/supabase/admin";
 import { CONDITIONS } from "@/lib/scoring";
 import type { EvaluationRow } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
-// AI 初评带多轮联网搜索,可能跑 1–3 分钟 (需要 Vercel Fluid Compute; 计划不支持时降到 60)
+// 联网 + 多轮工具调用,可能跑 1–3 分钟 (需 Vercel Fluid Compute; 计划不支持时降到 60)
 export const maxDuration = 300;
 
-const MODEL = "claude-opus-4-8";
+const MODEL = "deepseek-chat"; // V3,支持 function calling
+const DEEPSEEK_BASE_URL = "https://api.deepseek.com";
+const MAX_SEARCHES = 8;
+const MAX_STEPS = 12;
 
 // 铁律: AI 只整理证据,绝不打分、绝不给买卖建议。分数只能人工录入。
 const SYSTEM_PROMPT = `你是一位 A 股投研助理,为一个人工评分的投研框架整理参考材料。
@@ -17,7 +20,7 @@ const SYSTEM_PROMPT = `你是一位 A 股投研助理,为一个人工评分的�
 该框架有五条打分维度(由人工打 0/1/2 分,你绝不参与打分):
 ${CONDITIONS.map((c) => `C${c.n} ${c.label} — ${c.hint}`).join("\n")}
 
-你的任务: 针对指定股票,用联网搜索核实最新公开信息(公司公告、财报、新闻、交易所互动平台、行业数据),按下面的固定结构输出一份**证据整理**。
+你可以调用 web_search 工具搜索中文互联网(公司公告、财报、新闻、交易所互动平台、行业数据)核实最新公开信息;按需多次搜索。搜完后按下面的固定结构输出一份**证据整理**。
 
 铁律(违反即失职):
 1. 绝不输出任何形式的分数、评级或"建议打 X 分"。
@@ -36,12 +39,16 @@ ${CONDITIONS.map((c) => `C${c.n} ${c.label} — ${c.hint}`).join("\n")}
 【证伪条件建议】具体指标/阈值/时点形式的退出信号建议(2–3 条)
 【信息来源】本次引用的主要来源列表(标题 + 日期)`;
 
-function contextBlock(
-  name: string,
-  code: string,
-  market: { trade_date: string; close: number | null; pct_chg: number | null; pe: number | null; pb: number | null; market_cap: number | null }[],
-  evals: EvaluationRow[],
-): string {
+interface Market {
+  trade_date: string;
+  close: number | null;
+  pct_chg: number | null;
+  pe: number | null;
+  pb: number | null;
+  market_cap: number | null;
+}
+
+function contextBlock(name: string, code: string, market: Market[], evals: EvaluationRow[]): string {
   const lines: string[] = [`标的: ${name} (${code})`, ""];
 
   const latest = market[0];
@@ -50,10 +57,7 @@ function contextBlock(
     lines.push(
       `最新行情 (${latest.trade_date}): 收盘 ${latest.close ?? "—"} 元, 涨跌 ${latest.pct_chg ?? "—"}%, PE(动) ${latest.pe ?? "—"}, PB ${latest.pb ?? "—"}, 总市值 ${cap}`,
     );
-    const closes = market
-      .slice(0, 30)
-      .map((m) => m.close)
-      .filter((c): c is number => c != null);
+    const closes = market.slice(0, 30).map((m) => m.close).filter((c): c is number => c != null);
     if (closes.length > 5) {
       const chg = (((closes[0] - closes[closes.length - 1]) / closes[closes.length - 1]) * 100).toFixed(1);
       lines.push(`近 ${closes.length} 个交易日涨跌: ${chg}%`);
@@ -75,12 +79,53 @@ function contextBlock(
   return lines.join("\n");
 }
 
+// Tavily 联网搜索 — 返回标题+链接+摘要的纯文本块
+async function tavilySearch(query: string): Promise<string> {
+  const key = process.env.TAVILY_API_KEY;
+  if (!key) return "web_search 未配置 (缺 TAVILY_API_KEY),请基于已有信息完成,并在正文注明未能联网核实。";
+  try {
+    const res = await fetch("https://api.tavily.com/search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        api_key: key,
+        query,
+        search_depth: "advanced",
+        max_results: 5,
+        include_answer: false,
+      }),
+    });
+    if (!res.ok) return `搜索失败 (HTTP ${res.status})`;
+    const data = (await res.json()) as { results?: { title: string; url: string; content: string }[] };
+    const results = (data.results ?? [])
+      .map((r) => `【${r.title}】${r.url}\n${r.content}`)
+      .join("\n\n");
+    return results || "无搜索结果";
+  } catch (e) {
+    return `搜索异常: ${e instanceof Error ? e.message : String(e)}`;
+  }
+}
+
+const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
+  {
+    type: "function",
+    function: {
+      name: "web_search",
+      description: "搜索中文互联网获取公司公告、财报、新闻、行业数据。返回若干条标题+链接+摘要。",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "搜索关键词,例如 '中天科技 2025 年报 现金流' 或 '中天科技 股权质押 立案'" },
+        },
+        required: ["query"],
+      },
+    },
+  },
+];
+
 export async function POST(req: Request) {
-  if (!process.env.ANTHROPIC_API_KEY) {
-    return NextResponse.json(
-      { error: "服务端未配置 ANTHROPIC_API_KEY" },
-      { status: 500 },
-    );
+  if (!process.env.DEEPSEEK_API_KEY) {
+    return NextResponse.json({ error: "服务端未配置 DEEPSEEK_API_KEY" }, { status: 500 });
   }
 
   let body: { code?: string; name?: string };
@@ -115,46 +160,63 @@ export async function POST(req: Request) {
       .limit(5),
   ]);
 
-  const anthropic = new Anthropic();
-  const stream = anthropic.messages.stream({
-    model: MODEL,
-    max_tokens: 8000,
-    thinking: { type: "adaptive" },
-    system: SYSTEM_PROMPT,
-    tools: [
-      {
-        type: "web_search_20260209",
-        name: "web_search",
-        max_uses: 8,
-      },
-    ],
-    messages: [
-      {
-        role: "user",
-        content: `${contextBlock(name, code, marketRes.data ?? [], (evalsRes.data ?? []) as EvaluationRow[])}\n\n请生成这只股票的初评证据整理。`,
-      },
-    ],
+  const client = new OpenAI({
+    apiKey: process.env.DEEPSEEK_API_KEY,
+    baseURL: DEEPSEEK_BASE_URL,
   });
 
-  let message: Anthropic.Message;
+  const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
+    { role: "system", content: SYSTEM_PROMPT },
+    {
+      role: "user",
+      content: `${contextBlock(name, code, (marketRes.data ?? []) as Market[], (evalsRes.data ?? []) as EvaluationRow[])}\n\n请生成这只股票的初评证据整理。可多次调用 web_search 核实最新信息。`,
+    },
+  ];
+
+  let content = "";
+  let searches = 0;
   try {
-    message = await stream.finalMessage();
+    for (let step = 0; step < MAX_STEPS; step++) {
+      const resp = await client.chat.completions.create({
+        model: MODEL,
+        messages,
+        tools: TOOLS,
+        tool_choice: searches >= MAX_SEARCHES ? "none" : "auto",
+        max_tokens: 8000,
+      });
+      const msg = resp.choices[0].message;
+      messages.push(msg);
+
+      const calls = msg.tool_calls ?? [];
+      if (calls.length === 0) {
+        content = (msg.content ?? "").trim();
+        break;
+      }
+
+      for (const tc of calls) {
+        let result: string;
+        if (tc.function.name === "web_search" && searches < MAX_SEARCHES) {
+          searches++;
+          let q = "";
+          try {
+            q = (JSON.parse(tc.function.arguments) as { query?: string }).query ?? "";
+          } catch {
+            q = "";
+          }
+          result = q ? await tavilySearch(q) : "搜索关键词为空";
+        } else {
+          result = "已达搜索上限,请基于已有信息完成初评。";
+        }
+        messages.push({ role: "tool", tool_call_id: tc.id, content: result });
+      }
+    }
   } catch (e) {
-    const msg = e instanceof Anthropic.APIError ? `${e.status} ${e.message}` : String(e);
+    const msg = e instanceof OpenAI.APIError ? `${e.status} ${e.message}` : String(e);
     return NextResponse.json({ error: `AI 调用失败: ${msg}` }, { status: 502 });
   }
 
-  if (message.stop_reason === "refusal") {
-    return NextResponse.json({ error: "AI 拒绝了本次请求,请稍后重试" }, { status: 502 });
-  }
-
-  const content = message.content
-    .filter((b): b is Anthropic.TextBlock => b.type === "text")
-    .map((b) => b.text)
-    .join("\n")
-    .trim();
   if (!content) {
-    return NextResponse.json({ error: "AI 未返回内容" }, { status: 502 });
+    return NextResponse.json({ error: "AI 未在限定步数内产出内容,请重试" }, { status: 502 });
   }
 
   // 存档 (失败不阻塞返回 — 初评本体已生成)
@@ -165,6 +227,7 @@ export async function POST(req: Request) {
   return NextResponse.json({
     content,
     model: MODEL,
+    searches,
     saved: !saveErr,
     created_at: new Date().toISOString(),
   });
