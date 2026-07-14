@@ -6,13 +6,11 @@ import { CONDITIONS } from "@/lib/scoring";
 import type { EvaluationRow } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
-// 联网 + 多轮工具调用,可能跑 1–3 分钟 (需 Vercel Fluid Compute; 计划不支持时降到 60)
+// 联网搜索 + 一次整理,通常 30–90 秒 (需 Vercel Fluid Compute; 计划不支持时降到 60)
 export const maxDuration = 300;
 
-const MODEL = "deepseek-chat"; // V3,支持 function calling
+const MODEL = "deepseek-chat";
 const DEEPSEEK_BASE_URL = "https://api.deepseek.com";
-const MAX_SEARCHES = 8;
-const MAX_STEPS = 12;
 
 // 铁律: AI 只整理证据,绝不打分、绝不给买卖建议。分数只能人工录入。
 const SYSTEM_PROMPT = `你是一位 A 股投研助理,为一个人工评分的投研框架整理参考材料。
@@ -20,12 +18,12 @@ const SYSTEM_PROMPT = `你是一位 A 股投研助理,为一个人工评分的�
 该框架有五条打分维度(由人工打 0/1/2 分,你绝不参与打分):
 ${CONDITIONS.map((c) => `C${c.n} ${c.label} — ${c.hint}`).join("\n")}
 
-你可以调用 web_search 工具搜索中文互联网(公司公告、财报、新闻、交易所互动平台、行业数据)核实最新公开信息;按需多次搜索。搜完后按下面的固定结构输出一份**证据整理**。
+用户消息里会给你库内数据(行情/历史评估)和一批联网搜索到的资料。请**只依据这些材料**整理一份证据整理,按下面的固定结构输出。
 
 铁律(违反即失职):
 1. 绝不输出任何形式的分数、评级或"建议打 X 分"。
 2. 绝不给出买入/卖出/持有建议或目标价。
-3. 事实与推测分开写;每条关键事实标注来源与日期;搜不到就写"未能核实",不要编造。
+3. 事实与推测分开写;每条关键事实尽量标注来源与日期;材料里没有的就写"未能核实",不要编造。
 4. 语言简体中文,克制、判断留白,把结论空间留给人。
 
 输出结构(纯文本,用【】做节标题,不用 markdown 符号):
@@ -38,6 +36,18 @@ ${CONDITIONS.map((c) => `C${c.n} ${c.label} — ${c.hint}`).join("\n")}
 【反向检查草稿】如果看多故事是错的,最可能错在哪里(2–3 条,供人工反向检查参考)
 【证伪条件建议】具体指标/阈值/时点形式的退出信号建议(2–3 条)
 【信息来源】本次引用的主要来源列表(标题 + 日期)`;
+
+// 固定搜索面,覆盖五条 + 治理红线,保证每次都实际检索到位。
+function buildQueries(name: string): { tag: string; q: string }[] {
+  return [
+    { tag: "C1 现金流/财务", q: `${name} 最新财报 营收 净利润 经营现金流 资产负债` },
+    { tag: "C2 估值", q: `${name} 市盈率 市净率 估值 行业对比` },
+    { tag: "C3 新业务催化", q: `${name} 新业务 在手订单 项目进展 最新公告 互动易` },
+    { tag: "C4 板块 β", q: `${name} 所属板块 概念 近期走势` },
+    { tag: "红线扫描", q: `${name} 股权质押比例 实控人 立案调查 司法拍卖 违规 风险` },
+    { tag: "C5 机构空间", q: `${name} 机构持仓 北向资金 龙虎榜 股东户数` },
+  ];
+}
 
 interface Market {
   trade_date: string;
@@ -55,13 +65,8 @@ function contextBlock(name: string, code: string, market: Market[], evals: Evalu
   if (latest) {
     const cap = latest.market_cap ? `${(latest.market_cap / 1e8).toFixed(0)} 亿` : "—";
     lines.push(
-      `最新行情 (${latest.trade_date}): 收盘 ${latest.close ?? "—"} 元, 涨跌 ${latest.pct_chg ?? "—"}%, PE(动) ${latest.pe ?? "—"}, PB ${latest.pb ?? "—"}, 总市值 ${cap}`,
+      `库内最新行情 (${latest.trade_date}): 收盘 ${latest.close ?? "—"} 元, 涨跌 ${latest.pct_chg ?? "—"}%, PE(动) ${latest.pe ?? "—"}, PB ${latest.pb ?? "—"}, 总市值 ${cap}`,
     );
-    const closes = market.slice(0, 30).map((m) => m.close).filter((c): c is number => c != null);
-    if (closes.length > 5) {
-      const chg = (((closes[0] - closes[closes.length - 1]) / closes[closes.length - 1]) * 100).toFixed(1);
-      lines.push(`近 ${closes.length} 个交易日涨跌: ${chg}%`);
-    }
   } else {
     lines.push("库内暂无行情数据。");
   }
@@ -80,9 +85,9 @@ function contextBlock(name: string, code: string, market: Market[], evals: Evalu
 }
 
 // Tavily 联网搜索 — 返回标题+链接+摘要的纯文本块
-async function tavilySearch(query: string): Promise<string> {
+async function tavilySearch(query: string): Promise<string | null> {
   const key = process.env.TAVILY_API_KEY;
-  if (!key) return "web_search 未配置 (缺 TAVILY_API_KEY),请基于已有信息完成,并在正文注明未能联网核实。";
+  if (!key) return null;
   try {
     const res = await fetch("https://api.tavily.com/search", {
       method: "POST",
@@ -91,37 +96,20 @@ async function tavilySearch(query: string): Promise<string> {
         api_key: key,
         query,
         search_depth: "advanced",
-        max_results: 5,
+        max_results: 4,
         include_answer: false,
       }),
     });
-    if (!res.ok) return `搜索失败 (HTTP ${res.status})`;
+    if (!res.ok) return `(搜索失败 HTTP ${res.status})`;
     const data = (await res.json()) as { results?: { title: string; url: string; content: string }[] };
     const results = (data.results ?? [])
       .map((r) => `【${r.title}】${r.url}\n${r.content}`)
       .join("\n\n");
-    return results || "无搜索结果";
+    return results || "(无结果)";
   } catch (e) {
-    return `搜索异常: ${e instanceof Error ? e.message : String(e)}`;
+    return `(搜索异常: ${e instanceof Error ? e.message : String(e)})`;
   }
 }
-
-const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
-  {
-    type: "function",
-    function: {
-      name: "web_search",
-      description: "搜索中文互联网获取公司公告、财报、新闻、行业数据。返回若干条标题+链接+摘要。",
-      parameters: {
-        type: "object",
-        properties: {
-          query: { type: "string", description: "搜索关键词,例如 '中天科技 2025 年报 现金流' 或 '中天科技 股权质押 立案'" },
-        },
-        required: ["query"],
-      },
-    },
-  },
-];
 
 export async function POST(req: Request) {
   if (!process.env.DEEPSEEK_API_KEY) {
@@ -143,83 +131,61 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "缺少股票名称" }, { status: 400 });
   }
 
-  // 库内上下文: 行情 + 历史评估 (可能都为空 — 新股票也能生成)
   const supabase = createServerSupabase();
-  const [marketRes, evalsRes] = await Promise.all([
+
+  // 库内上下文 + 联网搜索并行拉取
+  const queries = buildQueries(name);
+  const [marketRes, evalsRes, ...searchResults] = await Promise.all([
     supabase
       .from("market_data")
       .select("trade_date, close, pct_chg, pe, pb, market_cap")
       .eq("stock_code", code)
       .order("trade_date", { ascending: false })
-      .limit(60),
+      .limit(1),
     supabase
       .from("evaluations")
       .select("*")
       .eq("stock_code", code)
       .order("eval_date", { ascending: false })
       .limit(5),
+    ...queries.map((item) => tavilySearch(item.q)),
   ]);
+
+  const tavilyConfigured = searchResults.some((r) => r !== null);
+  const searchBlock = tavilyConfigured
+    ? queries
+        .map((item, i) => `# 搜索 (${item.tag}): ${item.q}\n${searchResults[i] ?? "(无)"}`)
+        .join("\n\n")
+    : "(未配置 TAVILY_API_KEY,本次无联网资料,请基于库内数据整理,并在正文明确说明未能联网核实。)";
 
   const client = new OpenAI({
     apiKey: process.env.DEEPSEEK_API_KEY,
     baseURL: DEEPSEEK_BASE_URL,
   });
 
-  const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
-    { role: "system", content: SYSTEM_PROMPT },
-    {
-      role: "user",
-      content: `${contextBlock(name, code, (marketRes.data ?? []) as Market[], (evalsRes.data ?? []) as EvaluationRow[])}\n\n请生成这只股票的初评证据整理。可多次调用 web_search 核实最新信息。`,
-    },
-  ];
-
   let content = "";
-  let searches = 0;
   try {
-    for (let step = 0; step < MAX_STEPS; step++) {
-      const resp = await client.chat.completions.create({
-        model: MODEL,
-        messages,
-        tools: TOOLS,
-        tool_choice: searches >= MAX_SEARCHES ? "none" : "auto",
-        max_tokens: 8000,
-      });
-      const msg = resp.choices[0].message;
-      messages.push(msg);
-
-      const calls = msg.tool_calls ?? [];
-      if (calls.length === 0) {
-        content = (msg.content ?? "").trim();
-        break;
-      }
-
-      for (const tc of calls) {
-        let result: string;
-        if (tc.function.name === "web_search" && searches < MAX_SEARCHES) {
-          searches++;
-          let q = "";
-          try {
-            q = (JSON.parse(tc.function.arguments) as { query?: string }).query ?? "";
-          } catch {
-            q = "";
-          }
-          result = q ? await tavilySearch(q) : "搜索关键词为空";
-        } else {
-          result = "已达搜索上限,请基于已有信息完成初评。";
-        }
-        messages.push({ role: "tool", tool_call_id: tc.id, content: result });
-      }
-    }
+    const resp = await client.chat.completions.create({
+      model: MODEL,
+      max_tokens: 8000,
+      messages: [
+        { role: "system", content: SYSTEM_PROMPT },
+        {
+          role: "user",
+          content: `${contextBlock(name, code, (marketRes.data ?? []) as Market[], (evalsRes.data ?? []) as EvaluationRow[])}\n\n===== 联网搜索资料 =====\n${searchBlock}\n\n请据此生成这只股票的初评证据整理。`,
+        },
+      ],
+    });
+    content = (resp.choices[0]?.message?.content ?? "").trim();
   } catch (e) {
     const msg = e instanceof OpenAI.APIError ? `${e.status} ${e.message}` : String(e);
     return NextResponse.json({ error: `AI 调用失败: ${msg}` }, { status: 502 });
   }
 
   if (!content) {
-    return NextResponse.json({ error: "AI 未在限定步数内产出内容,请重试" }, { status: 502 });
+    return NextResponse.json({ error: "AI 未返回内容,请重试" }, { status: 502 });
   }
 
-  // 存档 (失败不阻塞返回 — 初评本体已生成)
   const { error: saveErr } = await supabase
     .from("ai_reviews")
     .insert({ stock_code: code, content, model: MODEL });
@@ -227,7 +193,7 @@ export async function POST(req: Request) {
   return NextResponse.json({
     content,
     model: MODEL,
-    searches,
+    searched: tavilyConfigured ? queries.length : 0,
     saved: !saveErr,
     created_at: new Date().toISOString(),
   });
