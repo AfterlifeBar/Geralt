@@ -5,7 +5,7 @@
 
 ## 背景
 
-Phase 2 引入「AI 研究简报」（2026-07-13，初版 Claude + 联网搜索）。次日（2026-07-14）做了两步改造：先把 LLM 从 Claude 切换为 DeepSeek（搜索由 Tavily 承担），随后发现 DeepSeek 的 function-calling 会把原始 tool token 泄漏到输出里，遂弃用 function-calling。从 Claude 切走的具体动机未留下记录（待确认）。
+Phase 2 引入「AI 研究简报」（2026-07-13，初版 Claude + 联网搜索）。次日（2026-07-14）做了两步改造：先把 LLM 从 Claude 切换为 DeepSeek（搜索由 Tavily 承担），随后发现 DeepSeek 的 function-calling 会把原始 tool token 泄漏到输出里，遂弃用 function-calling。从 Claude 切走的动机（2026-07-18 由项目所有者确认）：**Claude 账号被封禁**，无法继续依赖其 API/服务，遂切换到 DeepSeek。教训：AI 供应商属于外部单点，切换成本要预设为随时会发生。
 
 ## 决策
 
